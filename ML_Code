@@ -1,0 +1,115 @@
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score
+
+# 1. Загрузка и подготовка данных 
+titanic_data = pd.read_csv(r'C:\titanic.csv')
+titanic_data = titanic_data.drop(['Name', 'Ticket', 'Cabin', 'Embarked'], axis=1)
+titanic_data['Sex'] = titanic_data['Sex'].map({'male': 0, 'female': 1})
+titanic_data['Age'] = titanic_data['Age'].fillna(titanic_data['Age'].median())
+titanic_data = titanic_data.dropna()
+
+X = titanic_data.drop('Survived', axis=1)
+y = titanic_data['Survived']
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# 2. Обучение модели 
+model = LogisticRegression(solver='liblinear')
+model.fit(X_train, y_train)
+y_pred = model.predict(X_test)
+accuracy = accuracy_score(y_test, y_pred)
+print(f"Accuracy on original data: {accuracy}")
+
+
+# 3. Функции для атак
+def attack_age_change(data, factor):
+    """Изменение значений в столбце 'Age'."""
+    attacked_data = data.copy()
+    attacked_data['Age'] = attacked_data['Age'] * factor
+    return attacked_data
+
+
+def attack_fare_change(data, factor):
+    """Изменение значений в столбце 'Fare'."""
+    attacked_data = data.copy()
+    attacked_data['Fare'] = attacked_data['Fare'] * factor
+    return attacked_data
+
+
+def attack_sex_flip(data):
+    """Переключение значений в столбце 'Sex' (0 на 1 и наоборот)."""
+    attacked_data = data.copy()
+    attacked_data['Sex'] = 1 - attacked_data['Sex']
+    return attacked_data
+
+def attack_pclass_flip(data):
+    """Меняет значения в Pclass на одно значение, например на 1."""
+    attacked_data = data.copy()
+    attacked_data['Pclass'] = 1  # меняем все классы на 1й
+    return attacked_data
+
+def attack_noise_add(data, noise_level):
+    """Добавление случайного шума к числовым столбцам."""
+    attacked_data = data.copy()
+    for col in ['Age', 'Fare', 'Pclass']:
+        attacked_data[col] = attacked_data[col] + np.random.normal(0, noise_level, size=len(attacked_data))
+    return attacked_data
+
+def attack_outlier_add(data, factor):
+    """Вставка экстремально нетипичных значений в столбец 'Age'."""
+    attacked_data = data.copy()
+    max_age = attacked_data['Age'].max()
+    min_age = attacked_data['Age'].min()
+    new_value_max = max_age * factor
+    new_value_min = min_age / factor
+
+    attacked_data.loc[attacked_data.index[::2], 'Age'] = new_value_max
+    attacked_data.loc[attacked_data.index[1::2], 'Age'] = new_value_min
+    return attacked_data
+
+def attack_row_duplicate(data, num_duplicates):
+    """Дублирование случайных строк."""
+    attacked_data = data.copy()
+    indices_to_duplicate = np.random.choice(attacked_data.index, size=num_duplicates, replace=True)
+    duplicated_rows = attacked_data.loc[indices_to_duplicate]
+    attacked_data = pd.concat([attacked_data, duplicated_rows], ignore_index=True)
+    return attacked_data
+
+def attack_row_delete(data, num_rows):
+    """Удаление случайных строк."""
+    attacked_data = data.copy()
+    if num_rows > len(attacked_data):
+        num_rows = len(attacked_data)
+    indices_to_delete = np.random.choice(attacked_data.index, size=num_rows, replace=False)
+    attacked_data = attacked_data.drop(indices_to_delete)
+    return attacked_data
+
+# 4. Применение атак и тестирование модели
+attacks = {
+    "age_change": lambda data: attack_age_change(data, 1.5),
+    "fare_change": lambda data: attack_fare_change(data, 2),
+    "sex_flip": lambda data: attack_sex_flip(data),
+    "pclass_flip": lambda data: attack_pclass_flip(data),
+    "noise_add": lambda data: attack_noise_add(data, 5),
+    "outlier_add": lambda data: attack_outlier_add(data, 2),
+    "row_duplicate": lambda data: attack_row_duplicate(data, 10),
+    "row_delete": lambda data: attack_row_delete(data, 10)
+}
+
+for attack_name, attack_func in attacks.items():
+    X_test_attacked = attack_func(X_test.copy())
+    if attack_name in ["row_duplicate", "row_delete"]:
+        X_test_attacked = X_test_attacked.iloc[:len(X_test)]
+
+    y_pred_attacked = model.predict(X_test_attacked)
+
+    if len(y_pred_attacked) == 0:
+        y_pred_attacked = [0] * len(y_test)
+    else:
+        y_pred_attacked = pd.Series(y_pred_attacked, index=X_test_attacked.index)  # делаем сопоставление по индексу
+        y_pred_attacked = y_pred_attacked.reindex(X_test.index).fillna(0).values  # reindex, fillna, to values
+
+    accuracy_attacked = accuracy_score(y_test, y_pred_attacked)
+    print(f"Accuracy after {attack_name} attack: {accuracy_attacked}")
